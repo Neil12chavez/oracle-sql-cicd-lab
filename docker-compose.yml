@@ -1,0 +1,34 @@
+
+services:
+  oracle-db:
+    image: ${ORACLE_IMAGE:-gvenzl/oracle-free:23.26.3-slim-faststart}
+    container_name: oracle26ai-local
+    ports:
+      - "127.0.0.1:1521:1521"
+    environment:
+      ORACLE_PASSWORD: "${ORACLE_PASSWORD:?define ORACLE_PASSWORD en .env}"
+      APP_USER: "${APP_USER:-app_user}"
+      APP_USER_PASSWORD: "${APP_USER_PASSWORD:?define APP_USER_PASSWORD en .env}"
+    volumes:
+      - ./db:/container-entrypoint-initdb.d
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  sqlcl:
+    image: ${SQLCL_IMAGE:-container-registry.oracle.com/database/sqlcl:latest}
+    container_name: sqlcl-client
+    depends_on:
+      oracle-db:
+        condition: service_healthy
+    entrypoint: ["tail", "-f", "/dev/null"]
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+
+volumes:
+  oracle-data:

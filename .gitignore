@@ -1,0 +1,24 @@
+# --- Secretos ---
+.env
+.env.*
+!.env.example
+
+# --- Artefactos generados (SQLcl Projects) ---
+dist/
+artifact/
+*.zip
+*.tgz
+
+# --- Logs / trazas Oracle ---
+*.log
+logs/
+*.trc
+*.trm
+
+# --- SO / editores ---
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.idea/
+.vscode/

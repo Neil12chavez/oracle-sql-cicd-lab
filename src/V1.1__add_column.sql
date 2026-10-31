@@ -1,0 +1,1 @@
+ALTER TABLE employees ADD (salary NUMBER(10,2) DEFAULT 0 NOT NULL);

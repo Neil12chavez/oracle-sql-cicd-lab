@@ -1,0 +1,16 @@
+# Normalizar fin de línea (evita CRLF en Linux/WSL)
+* text=auto eol=lf
+
+# Pipeline / scripts
+*.sql         text eol=lf
+Makefile      text eol=lf
+*.mk          text eol=lf
+*.sh          text eol=lf
+*.yml         text eol=lf
+*.yaml        text eol=lf
+.env.example  text eol=lf
+
+# Binarios / artefactos
+*.zip   binary
+*.tgz   binary
+*.jar   binary
