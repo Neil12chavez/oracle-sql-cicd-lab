@@ -1,63 +1,122 @@
-# --- Variables ---
-PROJECT_NAME = mi-proyecto-db
-DB_USER = app_user
-DB_PASS = AppPassword123
-DB_CONNECT = localhost:1521/FREEPDB1
+SHELL := /bin/bash
+.ONESHELL:
+.NOTPARALLEL:
+.DEFAULT_GOAL := help
 
-# --- Comandos Principales ---
+COMPOSE      := docker compose
+MIGRATIONS   := migrations
+ARTIFACT_DIR := artifact
+VERSION      ?= 1.1
+ARTIFACT     := $(ARTIFACT_DIR)/sql-$(VERSION).tar.gz
+SQLCL        := $(COMPOSE) exec -T --user $$(id -u):$$(id -g) -e HOME=/tmp sqlcl
 
-# Levanta el entorno (base de datos + SQLcl)
+-include .env
+export
+DB_CONNECT := $(DB_HOST):$(DB_PORT)/$(DB_SERVICE)
+
+.PHONY: help preflight checkout lint up wait check package deploy verify rollback reset down clean ci-local
+
+help:
+	@echo "Targets:"
+	@echo "  preflight  valida repo/compose/env"
+	@echo "  checkout   estado de git"
+	@echo "  lint       valida sintaxis SQL (sqlfluff)"
+	@echo "  up/wait    levanta y espera healthy"
+	@echo "  check      prueba de conexión"
+	@echo "  package    crea artefacto + sha256"
+	@echo "  deploy     verifica checksum, extrae y aplica"
+	@echo "  verify     comprueba esquema/datos"
+	@echo "  rollback   vuelve al baseline"
+	@echo "  reset      down -v + up (BD limpia)"
+	@echo "  ci-local   pipeline completo"
+
+preflight:
+	set -e
+	test -f .env || { echo "Falta .env"; exit 1; }
+	$(COMPOSE) config --quiet
+	@echo "preflight OK (git: $$(git branch --show-current))"
+
+checkout:
+	git status --porcelain
+	git log -1 --oneline
+
+lint:
+	docker run --rm -v "$(CURDIR)/$(MIGRATIONS):/sql" sqlfluff/sqlfluff \
+	  parse --dialect oracle /sql >/dev/null
+	@echo "lint OK"
+
 up:
-	@echo "🚀 Levantando entorno Oracle 26ai y SQLcl..."
-	docker-compose up -d
-	@echo "✅ Entorno listo. La base de datos está en localhost:1521"
+	$(COMPOSE) up -d --wait
 
-# Detiene y elimina los contenedores
-down:
-	@echo "🛑 Deteniendo entorno..."
-	docker-compose down -v
+wait:
+	set -e
+	cid=$$($(COMPOSE) ps -q oracle-db)
+	for i in $$(seq 1 60); do
+	  [ "$$(docker inspect -f '{{.State.Health.Status}}' $$cid)" = healthy ] && exit 0
+	  sleep 5
+	done
+	echo "Timeout esperando healthy"; exit 1
 
-# Inicializa un proyecto de SQLcl (solo la primera vez)
-init-project:
-	@echo "🔧 Inicializando proyecto SQLcl..."
-	# Este comando se ejecuta DENTRO del contenedor de SQLcl
-	docker-compose exec sqlcl sql /nolog <<-EOF
-	CONNECT ${DB_USER}/${DB_PASS}@${DB_CONNECT}
-	PROJECT INIT ${PROJECT_NAME}
-	EXIT
-	EOF
-	@echo "✅ Proyecto '${PROJECT_NAME}' inicializado."
+check:
+	printf 'CONNECT $(APP_USER)/$(APP_USER_PASSWORD)@$(DB_CONNECT)\nSELECT 1 FROM dual;\nEXIT\n' \
+	  | $(SQLCL) sql /nolog
 
-# Prepara y despliega una migración (simula el flujo de CI/CD)
+package:
+	mkdir -p $(ARTIFACT_DIR)
+	tar czf $(ARTIFACT) $(MIGRATIONS)
+	sha256sum $(ARTIFACT) > $(ARTIFACT).sha256
+	@echo "artefacto: $(ARTIFACT)"
+
 deploy:
-	@echo "📦 Preparando y desplegando migración..."
-	# 1. Copiamos el script de migración al directorio 'next' que SQLcl espera.
-	#    (En un flujo real, SQLcl exportaría los cambios del esquema de desarrollo)
-	mkdir -p ${PROJECT_NAME}/next
-	cp src/V1.1__add_column.sql ${PROJECT_NAME}/next/
-	
-	# 2. Ejecutamos el flujo de SQLcl Projects: stage -> release -> deploy
-	docker-compose exec sqlcl sql /nolog <<-EOF
-	CONNECT ${DB_USER}/${DB_PASS}@${DB_CONNECT}
-	PROJECT STAGE
-	PROJECT RELEASE -version 1.1
-	PROJECT DEPLOY
-	EXIT
-	EOF
-	@echo "✅ Migración desplegada."
+	set -e
+	sha256sum -c $(ARTIFACT).sha256
+	rm -rf .deploy && mkdir -p .deploy
+	tar xzf $(ARTIFACT) -C .deploy
+	{
+	  echo "CONNECT $(APP_USER)/$(APP_USER_PASSWORD)@$(DB_CONNECT)"
+	  echo "WHENEVER SQLERROR EXIT SQL.SQLCODE"
+	  for f in .deploy/$(MIGRATIONS)/*.sql; do echo "@$$f"; done
+	  echo "EXIT"
+	} | $(SQLCL) sql /nolog
 
-# Verifica que el cambio se aplicó correctamente
 verify:
-	@echo "🔍 Verificando el estado del esquema..."
-	docker-compose exec sqlcl sql /nolog <<-EOF
-	CONNECT ${DB_USER}/${DB_PASS}@${DB_CONNECT}
-	SELECT column_name, data_type FROM user_tab_columns WHERE table_name = 'EMPLOYEES';
+	set -e
+	$(SQLCL) sql /nolog <<SQL
+	CONNECT $(APP_USER)/$(APP_USER_PASSWORD)@$(DB_CONNECT)
+	WHENEVER SQLERROR EXIT SQL.SQLCODE
+	DECLARE v NUMBER;
+	BEGIN
+	  SELECT COUNT(*) INTO v FROM user_tab_columns
+	   WHERE table_name='EMPLOYEES' AND column_name='SALARY';
+	  IF v = 0 THEN RAISE_APPLICATION_ERROR(-20001, 'SALARY missing'); END IF;
+	END;
+	/
+	SELECT COUNT(*) AS filas FROM employees;
 	EXIT
-	EOF
-	@echo "✅ Verificación completada. Deberías ver la columna 'SALARY'."
+	SQL
 
-# Flujo completo de validación
-ci-local: up init-project deploy verify
-	@echo "🎉 Flujo CI/CD local completado con éxito."
+rollback:
+	$(COMPOSE) down -v
+	$(COMPOSE) up -d --wait
 
-.PHONY: up down init-project deploy verify ci-local
+reset: rollback
+
+down:
+	$(COMPOSE) down
+
+clean:
+	rm -rf $(ARTIFACT_DIR) .deploy
+
+ci-local:
+	set -e
+	trap 'echo "FALLÓ: rollback"; $(MAKE) rollback' ERR
+	$(MAKE) preflight
+	$(MAKE) reset
+	$(MAKE) up
+	$(MAKE) wait
+	$(MAKE) lint
+	$(MAKE) check
+	$(MAKE) package
+	$(MAKE) deploy
+	$(MAKE) verify
+	@echo "CI LOCAL OK"
