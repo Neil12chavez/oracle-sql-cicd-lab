@@ -15,6 +15,7 @@ export
 DB_CONNECT := $(DB_HOST):$(DB_PORT)/$(DB_SERVICE)
 
 .PHONY: help preflight checkout lint up wait check package deploy verify rollback reset down clean ci-local
+.SILENT: check deploy verify
 
 help:
 	@echo "Targets:"

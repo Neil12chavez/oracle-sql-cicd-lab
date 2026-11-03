@@ -66,19 +66,23 @@ gvenzl/oracle-free   23.26.3-slim   ...   2.84GB   848MB
 
 ### ¿Por qué `slim` y no `faststart`?
 
-- `slim` (~809 MB comprimido): imagen ligera; el **primer arranque es lento** porque crea la BD.
-- `*-faststart` (~6.46 GB en disco): arranque rápido, pensada para **CI efímero** (se crea y destruye la BD).
-- **Decisión:** `slim` + volumen persistente en local. El coste de creación se paga **una sola vez**.
-- Para CI (cuando se añada Actions) se puede usar `slim-faststart` solo en el job, vía `ORACLE_IMAGE`.
+- `slim` (~809 MB comprimido, ~2.8 GB en disco): trae los datafiles comprimidos y los
+  descomprime al iniciar (~10-20 s); el arranque es rápido y ocupa mucho menos.
+- `*-faststart` (~6.46 GB en disco): datafiles ya expandidos; arranque algo más rápido,
+  pensada para escenarios efímeros. No es necesaria para este laboratorio.
+- **Decisión:** `slim` + volumen persistente. Se ahorran ~3.6 GB y el arranque sigue
+  siendo rápido.
 
 ---
 
 ## Estado actual
 
-- **Fase 0:** completada.
-- **Fase 1 (en progreso):** init de BD con tabla `employees` + seed.
-  - `db/01_schema.sql` eliminado (el usuario lo crea la imagen con `APP_USER`/`APP_USER_PASSWORD`).
-  - Pendiente: calificar la tabla como `app_user.employees` y completar `db/03_seed.sql`.
+- **Fase 0:** completada — repo, secretos fuera del código y compose reproducible.
+- **Fase 1:** completada — `app_user.employees` + seed (3 filas).
+- **Fase 2:** completada — migración en `migrations/`, lint/apply/verify manuales.
+- **Fase 3:** completada — pipeline en `Makefile` con artefacto y checksum.
+- **Fase 4:** completada — pruebas de fallo/rollback y documentación en
+  [`docs/pipeline.md`](docs/pipeline.md).
 
 ## Inicio rápido
 
@@ -89,8 +93,9 @@ docker compose up -d --wait
 docker compose ps
 ```
 
-> El primer arranque con `slim` puede tardar varios minutos (crea la base de datos).
-> Si `--wait` se queda corto: `docker compose up -d` y revisa `docker compose logs -f oracle-db`.
+> El primer arranque con `slim` descomprime los datafiles (~10-20 s en este equipo;
+> puede tardar más en equipos lentos). Si `--wait` se queda corto:
+> `docker compose up -d` y revisa `docker compose logs -f oracle-db`.
 
 ## Acceso a la base de datos
 
@@ -101,7 +106,7 @@ docker compose exec -T sqlcl sql /nolog
 ```
 
 ```sql
-CONNECT app_user/AppPassword123@oracle-db:1521/FREEPDB1
+CONNECT app_user/<APP_USER_PASSWORD>@oracle-db:1521/FREEPDB1
 SELECT table_name FROM user_tables;
 EXIT
 ```
@@ -141,16 +146,19 @@ Pipeline local con Makefile, basado en bloques:
 7. **Verify** — comprobar esquema y datos.
 8. **Rollback** — volver al baseline si la verificación falla.
 
-Targets previstos:
+Targets disponibles:
 
 ```
 make up | down | reset
 make preflight | lint | check
-make package | deploy | verify | rollback
+make package | deploy | verify | rollback | clean
 make ci-local
 ```
 
 Artefacto: `artifact/sql-<version>.tar.gz` + `.sha256` (no se versiona en git).
+
+> El detalle de cada target, la matriz de fallos y las decisiones están en
+> [`docs/pipeline.md`](docs/pipeline.md).
 
 ## Estructura (objetivo)
 
@@ -165,7 +173,9 @@ Artefacto: `artifact/sql-<version>.tar.gz` + `.sha256` (no se versiona en git).
 ├── migrations/         # cambios versionados (los aplica el pipeline)
 │   └── V1.1__add_column.sql
 ├── artifact/           # artefactos generados (ignorado)
-└── docs/pipeline.md
+├── .deploy/            # extracción temporal del artefacto (ignorado)
+└── docs/
+    └── pipeline.md     # diseño, targets, matriz de fallos
 ```
 
 ## Buenas prácticas aplicadas
@@ -178,16 +188,17 @@ Artefacto: `artifact/sql-<version>.tar.gz` + `.sha256` (no se versiona en git).
 - *Fail-fast* al aplicar SQL.
 - Verificación posterior al deploy.
 - Rollback explícito.
-- Lint de SQL antes de conectar.
+- Lint de SQL antes de conectar (best-effort; el gate real es deploy en limpio).
 - Artefactos con checksum.
+- `.SILENT` en targets con credenciales para no imprimir secretos en logs.
 
 ## Roadmap
 
 - [x] **Fase 0** — repo, secretos y compose reproducible
-- [ ] **Fase 1** — init con tabla `employees` + seed
-- [ ] **Fase 2** — validar bloques a mano
-- [ ] **Fase 3** — pipeline en Makefile
-- [ ] **Fase 4** — pruebas de fallo/rollback
+- [x] **Fase 1** — init con tabla `employees` + seed
+- [x] **Fase 2** — validar bloques a mano
+- [x] **Fase 3** — pipeline en Makefile
+- [x] **Fase 4** — pruebas de fallo/rollback
 - [ ] **Fase 5** — documentación y DevSecOps básico
 - [ ] (Después) GitHub Actions como capa fina
 
