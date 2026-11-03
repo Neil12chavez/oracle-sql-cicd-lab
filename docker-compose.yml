@@ -1,7 +1,6 @@
-
 services:
   oracle-db:
-    image: ${ORACLE_IMAGE:-gvenzl/oracle-free:23.26.3-slim-faststart}
+    image: ${ORACLE_IMAGE:-gvenzl/oracle-free:23.26.3-slim}
     container_name: oracle26ai-local
     ports:
       - "127.0.0.1:1521:1521"
@@ -18,6 +17,10 @@ services:
       timeout: 5s
       retries: 30   # 10 anteriormete 
       start_period: 180s # 30 anteriormente
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 4g
+    cpus: "2"
+
 
   sqlcl:
     image: ${SQLCL_IMAGE:-container-registry.oracle.com/database/sqlcl:latest}
@@ -29,6 +32,9 @@ services:
     volumes:
       - .:/workspace
     working_dir: /workspace
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+    cpus: "1"
 
 volumes:
   oracle-data:

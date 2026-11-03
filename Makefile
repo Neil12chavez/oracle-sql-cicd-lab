@@ -9,12 +9,16 @@ ARTIFACT_DIR := artifact
 VERSION      ?= 1.1
 ARTIFACT     := $(ARTIFACT_DIR)/sql-$(VERSION).tar.gz
 SQLCL        := $(COMPOSE) exec -T --user $$(id -u):$$(id -g) -e HOME=/tmp sqlcl
+SQLFLUFF_IMAGE := sqlfluff/sqlfluff@sha256:8a408e8f236e922fc128e06d634c74f4c683394970c8ffc5d44100a341e3adf0
+GITLEAKS_IMAGE := ghcr.io/gitleaks/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
+TRIVY_IMAGE    := aquasec/trivy@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
 
 -include .env
 export
 DB_CONNECT := $(DB_HOST):$(DB_PORT)/$(DB_SERVICE)
+ORACLE_SCAN_IMAGE := $(if $(ORACLE_IMAGE),$(ORACLE_IMAGE),gvenzl/oracle-free:23.26.3-slim)
 
-.PHONY: help preflight checkout lint up wait check package deploy verify rollback reset down clean ci-local
+.PHONY: help preflight checkout lint up wait check package deploy verify rollback reset down clean ci-local security security-secrets security-image security-history
 .SILENT: check deploy verify
 
 help:
@@ -30,6 +34,8 @@ help:
 	@echo "  rollback   vuelve al baseline"
 	@echo "  reset      down -v + up (BD limpia)"
 	@echo "  ci-local   pipeline completo"
+	@echo "  security   escaneo de secretos (tracked) + imagen (reporte)"
+	@echo "  security-history  escaneo del historial (informativo)"
 
 preflight:
 	set -e
@@ -42,7 +48,7 @@ checkout:
 	git log -1 --oneline
 
 lint:
-	docker run --rm -v "$(CURDIR)/$(MIGRATIONS):/sql" sqlfluff/sqlfluff \
+	docker run --rm -v "$(CURDIR)/$(MIGRATIONS):/sql" $(SQLFLUFF_IMAGE) \
 	  parse --dialect oracle /sql >/dev/null
 	@echo "lint OK"
 
@@ -121,3 +127,23 @@ ci-local:
 	$(MAKE) deploy
 	$(MAKE) verify
 	@echo "CI LOCAL OK"
+
+security: security-secrets security-image
+
+security-secrets:
+	set -euo pipefail
+	tmp=$$(mktemp -d)
+	trap 'rm -rf "$$tmp"' EXIT
+	git ls-files -z | tar --null -T - -cf - | tar -xf - -C "$$tmp"
+	docker run --rm -v "$$tmp:/repo:ro" $(GITLEAKS_IMAGE) \
+	  detect --source /repo --no-git -v
+	@echo "security-secrets OK"
+
+security-image:
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock $(TRIVY_IMAGE) \
+	  image --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 $(ORACLE_SCAN_IMAGE)
+	@echo "$(ORACLE_SCAN_IMAGE): reporte generado (no bloqueante)"
+
+security-history:
+	docker run --rm -v "$(CURDIR):/repo" $(GITLEAKS_IMAGE) \
+	  detect --source /repo --log-opts="--all" -v
